@@ -1,0 +1,135 @@
+name: Automatización EC2 + S3
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Elige una opción'
+        required: true
+        type: choice
+        options:
+          - deploy
+          - destroy
+        default: deploy
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.action == 'deploy' }}
+
+    steps:
+      # CLONACIÓN DEL REPOSITORIO
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+        
+      # CONFIGURAR PHP
+      - name: Configurar PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          extensions: mbstring, xml
+
+      # EJECUTAR PRUEBAS UNITARIAS DE PHP
+      - name: Ejecutar pruebas unitarias de PHP con PHPUnit
+        run: |
+          composer clear-cache
+          rm -rf vendor composer.lock
+          composer install --prefer-dist --no-progress
+          php vendor/bin/phpunit PhpTest.php
+
+      # GENERAR DOCUMENTACIÓN DE PHP
+      - name: Generar documentación PHP con phpDocumentor
+        run: |
+          php phpDocumentor.phar -d . -t ./docs
+
+      # INSTALAR JSDOC
+      - name: Instalar JSDoc
+        run: |
+          npm install -g jsdoc
+
+      # DOCUMENTAR EL JAVASCRIPT
+      - name: Generar la documentación JavaScript
+        run: |
+          jsdoc ./index.js -d ./docs
+
+      # CREDENCIALES DE AWS
+      - name: Configurar credenciales AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
+
+      # TERRAFORM INSTALL
+      - name: Setup terraform
+        run: |
+          cd tf
+          curl -Lo terraform.zip https://releases.hashicorp.com/terraform/1.4.0/terraform_1.4.0_linux_amd64.zip
+          unzip -o terraform.zip
+          sudo mv terraform /usr/local/bin/
+          terraform --version
+
+      # TERRAFORM INIT
+      - name: TERRAFORM INIT
+        run: |
+          cd tf
+          terraform init
+
+      # TERRAFORM APPLY
+      - name: TERRAFORM APPLY
+        run: |
+          cd tf
+          terraform apply -auto-approve
+
+      # SUBIR .tfstate A S3
+      - name: Subir mi directorio a mi S3
+        run: aws s3 cp tf/terraform.tfstate s3://nereadaw/terraform.tfstate
+
+  destroy:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.action == 'destroy' }}
+
+    steps:
+      # CLONACIÓN DEL REPOSITORIO
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      # CREDENCIALES DE AWS
+      - name: Configurar credenciales AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
+
+      # INSTALAR TERRAFORM
+      - name: Setup terraform
+        run: |
+          cd tf
+          curl -Lo terraform.zip https://releases.hashicorp.com/terraform/1.4.0/terraform_1.4.0_linux_amd64.zip
+          unzip terraform.zip
+          sudo mv terraform /usr/local/bin/
+          terraform --version
+
+      # TERRAFORM INIT
+      - name: TERRAFORM INIT
+        run: |
+          cd tf
+          terraform init
+
+      # DESCARGAR ESTADO DE TERRAFORM DESDE S3
+      - name: Descargar estado de Terraform desde S3
+        run: |
+          aws s3 cp s3://nereadaw/terraform.tfstate tf/terraform.tfstate
+
+      # INICIALIZAR Y DESTRUIR TERRAFORM
+      - name: Inicializar y destruir Terraform
+        run: |
+          cd tf
+          terraform init
+          terraform destroy -auto-approve
